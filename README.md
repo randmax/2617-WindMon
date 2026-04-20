@@ -1,15 +1,18 @@
 # WindMon Tekercseles Kamera Monitor
 
-Python GUI alkalmazas motor-tekercselesi folyamat megfigyelesere USB vagy laptop kameraval. A program elokepet mutat, felvetelt keszit, RGB pillanatkepet rogzit, majd a rogzitett kepen elhelyezett pontokhoz becsult szinspektrumot rajzol.
+Python GUI alkalmazas motor-tekercselesi folyamat megfigyelesere USB vagy laptop kameraval. A program elokepet mutat, egyetlen RGB pillanatkepet rogzit, majd a rogzitett kepet egy kulon feldolgozo ablakban jeleniti meg a hozzatartozo becsult szinspektrummal.
 
 ## Fobb funkciok
 
 - USB kamera es laptop webkamera kezelese menubol vagy legordulobol.
 - Elokep megjelenitese a valasztott kamerarol.
-- Video rogzitese `captures/` mappaba.
-- RGB kep rogzitese a pillanatnyi kepkockabol.
+- Egyetlen RGB kep rogzitese a pillanatnyi kepkockabol.
+- Kulon feldolgozo ablak a rogzitett kephez es a spektrumhoz.
 - Pontok elhelyezese a rogzitett kepen.
-- Pontonkent kulon szinu spektrumgorbe rajzolasa.
+- Pontonkent kulon szinu, kontrasztos szamjeloles a kepen.
+- Pontonkent kulon szinu spektrumgorbe rajzolasa a pont szamanak szinevel egyezoen.
+- Teljes kepernyos spektrum-nezet kulon gombbal.
+- Kattinthato marker a spektrumgorbeken a hullamhossz es intenzitas leolvasasahoz.
 - A spektrum 90 hullamhossz-mintara van bontva 380 nm es 780 nm kozott.
 
 ## Fontos muszaki megjegyzes
@@ -42,10 +45,11 @@ python app.py
 
 1. Inditsd el a programot.
 2. Valaszd ki a kamerat a felso listabol vagy a `Kamera` menubol.
-3. Szükség szerint inditsd el a felvetelt.
-4. Kattints az `RGB kep rogzitese` gombra.
-5. A jobb oldali rogzitett kepen kattints a vizsgalni kivant pontokra.
-6. A spektrum diagram jobb oldalon automatikusan frissul.
+3. Kattints a `Kep rogzitese` gombra.
+4. A megnyilo feldolgozo ablakban kattints a rogzitett kepen a vizsgalni kivant pontokra.
+5. A spektrum diagram ugyanebben az ablakban automatikusan frissul.
+6. A `Spektrum teljes kepernyon` gombbal kinagyithatod a spektrumot.
+7. Kattints egy spektrumgorbere, hogy a marker kiirja a hullamhosszt es az intenzitast.
 
 ## Projekt fajlok
 

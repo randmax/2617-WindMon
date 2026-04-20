@@ -21,6 +21,18 @@ OUTPUT_DIR = Path("captures")
 WAVELENGTH_START = 380
 WAVELENGTH_END = 780
 SPECTRUM_SAMPLES = 90
+MARKER_COLORS = [
+    "#ff3b30",
+    "#007aff",
+    "#34c759",
+    "#ff9500",
+    "#af52de",
+    "#00c7be",
+    "#ff2d55",
+    "#ffd60a",
+    "#64d2ff",
+    "#30d158",
+]
 
 
 @dataclass
@@ -28,7 +40,7 @@ class SamplePoint:
     x: int
     y: int
     rgb: tuple[int, int, int]
-    hex_color: str
+    marker_color: str
     spectrum: np.ndarray
 
 
@@ -36,33 +48,53 @@ class CameraRecorderApp:
     def __init__(self, root: tk.Tk) -> None:
         self.root = root
         self.root.title(APP_TITLE)
-        self.root.geometry("1420x860")
-        self.root.minsize(1200, 760)
+        self.root.geometry("960x640")
+        self.root.minsize(860, 560)
 
         OUTPUT_DIR.mkdir(exist_ok=True)
 
-        self.preview_size = (800, 450)
+        self.preview_size = (860, 500)
         self.capture_size = (960, 540)
         self.preview_after_id: str | None = None
 
         self.camera_var = tk.StringVar(value="")
         self.status_var = tk.StringVar(value="Kamera keresese...")
-        self.recording_var = tk.StringVar(value="Nincs aktiv felvetel")
 
         self.available_cameras: list[tuple[int, str]] = []
         self.current_camera_index: int | None = None
         self.capture: cv2.VideoCapture | None = None
         self.latest_frame_bgr: np.ndarray | None = None
         self.captured_image_rgb: np.ndarray | None = None
-        self.recording_writer: cv2.VideoWriter | None = None
-        self.recording_path: Path | None = None
         self.sample_points: list[SamplePoint] = []
+
+        self.processor_window: tk.Toplevel | None = None
+        self.processor_canvas: tk.Canvas | None = None
+        self.processor_figure: Figure | None = None
+        self.processor_axis = None
+        self.processor_plot_canvas: FigureCanvasTkAgg | None = None
+        self.processor_marker_annotation = None
+        self.processor_marker_artist = None
+        self.processor_marker_line = None
+        self.processor_plot_connection_id: int | None = None
+        self.processor_lines: list = []
+
+        self.fullscreen_window: tk.Toplevel | None = None
+        self.fullscreen_figure: Figure | None = None
+        self.fullscreen_axis = None
+        self.fullscreen_plot_canvas: FigureCanvasTkAgg | None = None
+        self.fullscreen_marker_annotation = None
+        self.fullscreen_marker_artist = None
+        self.fullscreen_marker_line = None
+        self.fullscreen_plot_connection_id: int | None = None
+        self.fullscreen_lines: list = []
+
+        self.capture_photo: ImageTk.PhotoImage | None = None
+        self.preview_photo: ImageTk.PhotoImage | None = None
 
         self.menu_camera = tk.Menu(self.root, tearoff=False)
 
         self._build_layout()
         self._build_menubar()
-        self._setup_plot()
 
         self.refresh_cameras()
         self.root.protocol("WM_DELETE_WINDOW", self.on_close)
@@ -71,13 +103,12 @@ class CameraRecorderApp:
     def _build_layout(self) -> None:
         root_frame = ttk.Frame(self.root, padding=12)
         root_frame.pack(fill=tk.BOTH, expand=True)
-        root_frame.columnconfigure(0, weight=3)
-        root_frame.columnconfigure(1, weight=2)
+        root_frame.columnconfigure(0, weight=1)
         root_frame.rowconfigure(1, weight=1)
 
         control_frame = ttk.Frame(root_frame)
-        control_frame.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
-        control_frame.columnconfigure(7, weight=1)
+        control_frame.grid(row=0, column=0, sticky="ew", pady=(0, 12))
+        control_frame.columnconfigure(4, weight=1)
 
         ttk.Label(control_frame, text="Aktiv kamera:").grid(row=0, column=0, padx=(0, 8))
         self.camera_combo = ttk.Combobox(
@@ -92,58 +123,39 @@ class CameraRecorderApp:
         ttk.Button(control_frame, text="Kamerak frissitese", command=self.refresh_cameras).grid(
             row=0, column=2, padx=(0, 8)
         )
-        ttk.Button(control_frame, text="Felvetel inditasa", command=self.start_recording).grid(
+        ttk.Button(control_frame, text="Kep rogzitese", command=self.capture_image).grid(
             row=0, column=3, padx=(0, 8)
         )
-        ttk.Button(control_frame, text="Felvetel leallitasa", command=self.stop_recording).grid(
-            row=0, column=4, padx=(0, 8)
-        )
-        ttk.Button(control_frame, text="RGB kep rogzitese", command=self.capture_image).grid(
-            row=0, column=5, padx=(0, 8)
-        )
-        ttk.Button(control_frame, text="Pontok torlese", command=self.clear_points).grid(
-            row=0, column=6, padx=(0, 8)
+        ttk.Button(control_frame, text="Feldolgozo ablak megnyitasa", command=self.open_processor_window).grid(
+            row=0, column=4, sticky="e"
         )
 
-        ttk.Label(control_frame, textvariable=self.status_var).grid(row=1, column=0, columnspan=4, sticky="w", pady=(10, 0))
-        ttk.Label(control_frame, textvariable=self.recording_var).grid(row=1, column=4, columnspan=4, sticky="e", pady=(10, 0))
+        ttk.Label(control_frame, textvariable=self.status_var).grid(
+            row=1,
+            column=0,
+            columnspan=5,
+            sticky="w",
+            pady=(10, 0),
+        )
 
-        preview_group = ttk.LabelFrame(root_frame, text="Elokep es rogzitett RGB kep", padding=10)
-        preview_group.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        preview_group = ttk.LabelFrame(root_frame, text="Elokep", padding=10)
+        preview_group.grid(row=1, column=0, sticky="nsew")
         preview_group.columnconfigure(0, weight=1)
-        preview_group.columnconfigure(1, weight=1)
         preview_group.rowconfigure(1, weight=1)
 
-        ttk.Label(preview_group, text="Elokep").grid(row=0, column=0, sticky="w", pady=(0, 8))
-        ttk.Label(preview_group, text="Rogzitett kep pontkijelolessel").grid(row=0, column=1, sticky="w", pady=(0, 8))
+        ttk.Label(
+            preview_group,
+            text="Elokep a kivalasztott kamerarol. A rogzitett kep kulon feldolgozo ablakban jelenik meg.",
+        ).grid(row=0, column=0, sticky="w", pady=(0, 8))
 
         self.preview_label = ttk.Label(preview_group)
-        self.preview_label.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
-
-        self.capture_canvas = tk.Canvas(
-            preview_group,
-            width=self.capture_size[0],
-            height=self.capture_size[1],
-            bg="#1f1f1f",
-            highlightthickness=1,
-            highlightbackground="#707070",
-            cursor="crosshair",
-        )
-        self.capture_canvas.grid(row=1, column=1, sticky="nsew")
-        self.capture_canvas.bind("<Button-1>", self.on_capture_canvas_click)
-
-        plot_group = ttk.LabelFrame(root_frame, text="RGB pontok becsult spektruma", padding=10)
-        plot_group.grid(row=1, column=1, sticky="nsew")
-        plot_group.columnconfigure(0, weight=1)
-        plot_group.rowconfigure(0, weight=1)
-
-        self.plot_host = ttk.Frame(plot_group)
-        self.plot_host.grid(row=0, column=0, sticky="nsew")
+        self.preview_label.grid(row=1, column=0, sticky="nsew")
 
     def _build_menubar(self) -> None:
         menubar = tk.Menu(self.root)
         file_menu = tk.Menu(menubar, tearoff=False)
         file_menu.add_command(label="RGB kep mentese...", command=self.save_captured_image)
+        file_menu.add_command(label="Feldolgozo ablak megnyitasa", command=self.open_processor_window)
         file_menu.add_separator()
         file_menu.add_command(label="Kilepes", command=self.on_close)
 
@@ -155,19 +167,133 @@ class CameraRecorderApp:
         menubar.add_cascade(label="Kamera", menu=camera_menu)
         self.root.config(menu=menubar)
 
-    def _setup_plot(self) -> None:
-        self.figure = Figure(figsize=(5.5, 4.8), dpi=100)
-        self.axis = self.figure.add_subplot(111)
-        self.axis.set_title("Pontonkenti spektrum")
-        self.axis.set_xlabel("Hullamhossz (nm)")
-        self.axis.set_ylabel("Intenzitas")
-        self.axis.set_xlim(WAVELENGTH_START, WAVELENGTH_END)
-        self.axis.set_ylim(0.0, 1.05)
-        self.axis.grid(True, alpha=0.25)
+    def _build_processor_window(self) -> None:
+        if self.processor_window is not None and self.processor_window.winfo_exists():
+            self.processor_window.lift()
+            return
 
-        self.plot_canvas = FigureCanvasTkAgg(self.figure, master=self.plot_host)
-        self.plot_canvas.draw()
-        self.plot_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.processor_window = tk.Toplevel(self.root)
+        self.processor_window.title("Feldolgozo ablak")
+        self.processor_window.geometry("1460x860")
+        self.processor_window.minsize(1180, 720)
+        self.processor_window.protocol("WM_DELETE_WINDOW", self.on_processor_window_close)
+
+        container = ttk.Frame(self.processor_window, padding=12)
+        container.pack(fill=tk.BOTH, expand=True)
+        container.columnconfigure(0, weight=3)
+        container.columnconfigure(1, weight=2)
+        container.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(container)
+        toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
+        toolbar.columnconfigure(3, weight=1)
+        ttk.Button(toolbar, text="Pontok torlese", command=self.clear_points).grid(row=0, column=0, padx=(0, 8))
+        ttk.Button(toolbar, text="RGB kep mentese", command=self.save_captured_image).grid(row=0, column=1, padx=(0, 8))
+        ttk.Button(toolbar, text="Spektrum teljes kepernyon", command=self.open_fullscreen_spectrum_window).grid(
+            row=0, column=2, padx=(0, 8)
+        )
+        ttk.Label(
+            toolbar,
+            text="Kattints a kepre pontokhoz, a grafikonra markeres leolvasashoz.",
+        ).grid(row=0, column=3, sticky="e")
+
+        image_group = ttk.LabelFrame(container, text="Rogzitett RGB kep", padding=10)
+        image_group.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
+        image_group.columnconfigure(0, weight=1)
+        image_group.rowconfigure(0, weight=1)
+
+        self.processor_canvas = tk.Canvas(
+            image_group,
+            width=self.capture_size[0],
+            height=self.capture_size[1],
+            bg="#1f1f1f",
+            highlightthickness=1,
+            highlightbackground="#707070",
+            cursor="crosshair",
+        )
+        self.processor_canvas.grid(row=0, column=0, sticky="nsew")
+        self.processor_canvas.bind("<Button-1>", self.on_capture_canvas_click)
+
+        plot_group = ttk.LabelFrame(container, text="RGB pontok becsult spektruma", padding=10)
+        plot_group.grid(row=1, column=1, sticky="nsew")
+        plot_group.columnconfigure(0, weight=1)
+        plot_group.rowconfigure(0, weight=1)
+
+        plot_host = ttk.Frame(plot_group)
+        plot_host.grid(row=0, column=0, sticky="nsew")
+
+        self.processor_figure = Figure(figsize=(5.5, 4.8), dpi=100)
+        self.processor_axis = self.processor_figure.add_subplot(111)
+        self.processor_plot_canvas = FigureCanvasTkAgg(self.processor_figure, master=plot_host)
+        self.processor_plot_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.connect_plot_events("processor")
+
+        self.redraw_capture_canvas()
+        self.update_spectrum_plot()
+
+    def open_fullscreen_spectrum_window(self) -> None:
+        if self.captured_image_rgb is None:
+            messagebox.showinfo("Nincs rogzitett kep", "Elobb keszits egy kepet a kamerabol.")
+            return
+
+        if self.fullscreen_window is not None and self.fullscreen_window.winfo_exists():
+            self.fullscreen_window.lift()
+            self.refresh_fullscreen_plot()
+            return
+
+        self.fullscreen_window = tk.Toplevel(self.root)
+        self.fullscreen_window.title("Teljes kepernyos spektrum")
+        self.fullscreen_window.attributes("-fullscreen", True)
+        self.fullscreen_window.protocol("WM_DELETE_WINDOW", self.close_fullscreen_spectrum_window)
+
+        container = ttk.Frame(self.fullscreen_window, padding=10)
+        container.pack(fill=tk.BOTH, expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        toolbar = ttk.Frame(container)
+        toolbar.grid(row=0, column=0, sticky="ew", pady=(0, 10))
+        toolbar.columnconfigure(2, weight=1)
+        ttk.Button(toolbar, text="Kilepes a teljes kepernyobol", command=self.close_fullscreen_spectrum_window).grid(
+            row=0, column=0, padx=(0, 8)
+        )
+        ttk.Button(toolbar, text="Pontok torlese", command=self.clear_points).grid(row=0, column=1, padx=(0, 8))
+        ttk.Label(toolbar, text="Kattints a gorbekre a hullamhossz es intenzitas leolvasasahoz.").grid(
+            row=0, column=2, sticky="e"
+        )
+
+        plot_host = ttk.Frame(container)
+        plot_host.grid(row=1, column=0, sticky="nsew")
+
+        self.fullscreen_figure = Figure(figsize=(12, 7), dpi=100)
+        self.fullscreen_axis = self.fullscreen_figure.add_subplot(111)
+        self.fullscreen_plot_canvas = FigureCanvasTkAgg(self.fullscreen_figure, master=plot_host)
+        self.fullscreen_plot_canvas.get_tk_widget().pack(fill=tk.BOTH, expand=True)
+        self.connect_plot_events("fullscreen")
+        self.refresh_fullscreen_plot()
+
+    def refresh_fullscreen_plot(self) -> None:
+        if self.fullscreen_window is None or not self.fullscreen_window.winfo_exists():
+            return
+
+        self.fullscreen_window.update_idletasks()
+        self.update_spectrum_plot()
+        if self.fullscreen_plot_canvas is not None:
+            self.fullscreen_plot_canvas.draw()
+
+    def close_fullscreen_spectrum_window(self) -> None:
+        if self.fullscreen_window is not None and self.fullscreen_window.winfo_exists():
+            self.fullscreen_window.destroy()
+
+        self.fullscreen_window = None
+        self.fullscreen_figure = None
+        self.fullscreen_axis = None
+        self.fullscreen_plot_canvas = None
+        self.fullscreen_marker_annotation = None
+        self.fullscreen_marker_artist = None
+        self.fullscreen_marker_line = None
+        self.fullscreen_plot_connection_id = None
+        self.fullscreen_lines = []
 
     def refresh_cameras(self) -> None:
         self.status_var.set("Kamerak keresese folyamatban...")
@@ -254,9 +380,6 @@ class CameraRecorderApp:
                 preview_image = self.resize_for_display(preview_rgb, self.preview_size)
                 self.preview_photo = ImageTk.PhotoImage(Image.fromarray(preview_image))
                 self.preview_label.configure(image=self.preview_photo)
-
-                if self.recording_writer is not None:
-                    self.recording_writer.write(frame_bgr)
             else:
                 self.status_var.set("Nem sikerult kepkockat olvasni a kamerabol.")
 
@@ -266,7 +389,11 @@ class CameraRecorderApp:
         target_w, target_h = size
         src_h, src_w = image_rgb.shape[:2]
         scale = min(target_w / src_w, target_h / src_h)
-        resized = cv2.resize(image_rgb, (max(1, int(src_w * scale)), max(1, int(src_h * scale))), interpolation=cv2.INTER_AREA)
+        resized = cv2.resize(
+            image_rgb,
+            (max(1, int(src_w * scale)), max(1, int(src_h * scale))),
+            interpolation=cv2.INTER_AREA,
+        )
 
         canvas = np.full((target_h, target_w, 3), 20, dtype=np.uint8)
         offset_x = (target_w - resized.shape[1]) // 2
@@ -291,15 +418,26 @@ class CameraRecorderApp:
 
         self.captured_image_rgb = cv2.cvtColor(self.latest_frame_bgr.copy(), cv2.COLOR_BGR2RGB)
         self.sample_points.clear()
+        self.open_processor_window()
         self.redraw_capture_canvas()
         self.update_spectrum_plot()
-        self.status_var.set("RGB kep rogzitve. Kattints a kepre pontok hozzaadasahoz.")
+        self.status_var.set("RGB kep rogzitve. A feldolgozo ablakban helyezhetsz el pontokat.")
+
+    def open_processor_window(self) -> None:
+        if self.captured_image_rgb is None:
+            messagebox.showinfo("Nincs rogzitett kep", "Elobb keszits egy kepet a kamerabol.")
+            return
+
+        self._build_processor_window()
 
     def redraw_capture_canvas(self) -> None:
-        self.capture_canvas.delete("all")
+        if self.processor_canvas is None or not self.processor_canvas.winfo_exists():
+            return
+
+        self.processor_canvas.delete("all")
 
         if self.captured_image_rgb is None:
-            self.capture_canvas.create_text(
+            self.processor_canvas.create_text(
                 self.capture_size[0] // 2,
                 self.capture_size[1] // 2,
                 text="Itt jelenik meg a rogzitett RGB kep",
@@ -310,7 +448,7 @@ class CameraRecorderApp:
 
         display_image = self.resize_for_display(self.captured_image_rgb, self.capture_size)
         self.capture_photo = ImageTk.PhotoImage(Image.fromarray(display_image))
-        self.capture_canvas.create_image(0, 0, anchor=tk.NW, image=self.capture_photo)
+        self.processor_canvas.create_image(0, 0, anchor=tk.NW, image=self.capture_photo)
 
         disp_w, disp_h, offset_x, offset_y = self.calculate_display_geometry(self.captured_image_rgb, self.capture_size)
         scale_x = disp_w / self.captured_image_rgb.shape[1]
@@ -319,22 +457,31 @@ class CameraRecorderApp:
         for idx, point in enumerate(self.sample_points, start=1):
             canvas_x = int(point.x * scale_x) + offset_x
             canvas_y = int(point.y * scale_y) + offset_y
-            self.capture_canvas.create_oval(
+            self.processor_canvas.create_oval(
                 canvas_x - 6,
                 canvas_y - 6,
                 canvas_x + 6,
                 canvas_y + 6,
-                fill=point.hex_color,
+                fill=self.rgb_to_hex(point.rgb),
                 outline="#ffffff",
                 width=2,
             )
-            self.capture_canvas.create_text(
-                canvas_x + 12,
-                canvas_y - 10,
+            self.processor_canvas.create_rectangle(
+                canvas_x + 8,
+                canvas_y - 16,
+                canvas_x + 30,
+                canvas_y + 4,
+                fill="#101010",
+                outline="#ffffff",
+                width=1,
+            )
+            self.processor_canvas.create_text(
+                canvas_x + 19,
+                canvas_y - 6,
                 text=str(idx),
-                fill=point.hex_color,
+                fill=point.marker_color,
                 font=("Segoe UI", 10, "bold"),
-                anchor=tk.NW,
+                anchor=tk.CENTER,
             )
 
     def on_capture_canvas_click(self, event: tk.Event) -> None:
@@ -357,7 +504,7 @@ class CameraRecorderApp:
             x=img_x,
             y=img_y,
             rgb=rgb,
-            hex_color=self.rgb_to_hex(rgb),
+            marker_color=self.get_marker_color(len(self.sample_points)),
             spectrum=self.estimate_spectrum(rgb),
         )
         self.sample_points.append(point)
@@ -369,7 +516,6 @@ class CameraRecorderApp:
         r, g, b = [channel / 255.0 for channel in rgb]
         luminance = np.clip(0.2126 * r + 0.7152 * g + 0.0722 * b, 0.05, 1.0)
 
-        # RGB kepbol csak becsult spektrum allithato elo.
         red_curve = np.exp(-0.5 * ((wavelengths - 620.0) / 36.0) ** 2)
         green_curve = np.exp(-0.5 * ((wavelengths - 540.0) / 30.0) ** 2)
         blue_curve = np.exp(-0.5 * ((wavelengths - 460.0) / 24.0) ** 2)
@@ -382,73 +528,140 @@ class CameraRecorderApp:
         return spectrum
 
     def update_spectrum_plot(self) -> None:
-        self.axis.clear()
-        self.axis.set_title("Pontonkenti spektrum")
-        self.axis.set_xlabel("Hullamhossz (nm)")
-        self.axis.set_ylabel("Intenzitas")
-        self.axis.set_xlim(WAVELENGTH_START, WAVELENGTH_END)
-        self.axis.set_ylim(0.0, 1.05)
-        self.axis.grid(True, alpha=0.25)
+        self.render_plot(self.processor_axis, self.processor_figure, self.processor_plot_canvas, "processor")
+        self.render_plot(self.fullscreen_axis, self.fullscreen_figure, self.fullscreen_plot_canvas, "fullscreen")
+
+    def render_plot(self, axis, figure: Figure | None, canvas: FigureCanvasTkAgg | None, target: str) -> None:
+        if axis is None or figure is None or canvas is None:
+            return
+
+        axis.clear()
+        axis.set_title("Pontonkenti spektrum")
+        axis.set_xlabel("Hullamhossz (nm)")
+        axis.set_ylabel("Intenzitas")
+        axis.set_xlim(WAVELENGTH_START, WAVELENGTH_END)
+        axis.set_ylim(0.0, 1.05)
+        axis.grid(True, alpha=0.25)
 
         wavelengths = np.linspace(WAVELENGTH_START, WAVELENGTH_END, SPECTRUM_SAMPLES)
+        lines: list = []
         for index, point in enumerate(self.sample_points, start=1):
-            self.axis.plot(
+            line, = axis.plot(
                 wavelengths,
                 point.spectrum,
-                color=point.hex_color,
-                linewidth=2.2,
+                color=point.marker_color,
+                linewidth=2.4,
                 label=f"Pont {index} RGB{point.rgb}",
             )
+            lines.append(line)
 
         if self.sample_points:
-            self.axis.legend(loc="upper right", fontsize=8)
+            axis.legend(loc="upper right", fontsize=8)
         else:
-            self.axis.text(
+            axis.text(
                 0.5,
                 0.5,
                 "A rogzitett kepen elhelyezett pontok spektruma itt jelenik meg.",
-                transform=self.axis.transAxes,
+                transform=axis.transAxes,
                 ha="center",
                 va="center",
                 fontsize=10,
             )
 
-        self.figure.tight_layout()
-        self.plot_canvas.draw()
+        self.set_lines_for_target(target, lines)
+        self.clear_marker_for_target(target)
+        figure.tight_layout()
+        canvas.draw()
 
-    def start_recording(self) -> None:
-        if self.latest_frame_bgr is None:
-            messagebox.showwarning("Nincs kamera", "Eloszor valassz kamerat, hogy elinduljon az elokep.")
+    def connect_plot_events(self, target: str) -> None:
+        canvas = self.get_canvas_for_target(target)
+        if canvas is None or self.get_connection_id_for_target(target) is not None:
             return
 
-        if self.recording_writer is not None:
-            messagebox.showinfo("Felvetel", "A felvetel mar folyamatban van.")
+        connection_id = canvas.mpl_connect(
+            "button_press_event",
+            lambda event, plot_target=target: self.on_plot_click(event, plot_target),
+        )
+        self.set_connection_id_for_target(target, connection_id)
+
+    def on_plot_click(self, event, target: str) -> None:
+        axis = self.get_axis_for_target(target)
+        canvas = self.get_canvas_for_target(target)
+        lines = self.get_lines_for_target(target)
+        if axis is None or canvas is None or event.inaxes != axis or event.xdata is None or event.ydata is None:
             return
 
-        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-        self.recording_path = OUTPUT_DIR / f"tekercseles_{timestamp}.avi"
-        height, width = self.latest_frame_bgr.shape[:2]
-        fourcc = cv2.VideoWriter_fourcc(*"XVID")
-        writer = cv2.VideoWriter(str(self.recording_path), fourcc, 20.0, (width, height))
-
-        if not writer.isOpened():
-            messagebox.showerror("Hiba", "A video fajl nem hozhato letre.")
+        nearest = self.find_nearest_curve_point(float(event.xdata), float(event.ydata), lines)
+        if nearest is None:
             return
 
-        self.recording_writer = writer
-        self.recording_var.set(f"Felvetel aktiv: {self.recording_path.name}")
+        line, wavelength, intensity = nearest
+        self.update_marker_for_target(target, axis, canvas, line, wavelength, intensity)
 
-    def stop_recording(self) -> None:
-        if self.recording_writer is None:
-            return
+    def find_nearest_curve_point(self, x_value: float, y_value: float, lines: list) -> tuple | None:
+        best_match = None
+        best_distance = None
 
-        self.recording_writer.release()
-        saved_path = self.recording_path
-        self.recording_writer = None
-        self.recording_path = None
-        self.recording_var.set("Nincs aktiv felvetel")
-        if saved_path is not None:
-            self.status_var.set(f"Video mentve ide: {saved_path}")
+        for line in lines:
+            x_data = np.asarray(line.get_xdata(), dtype=float)
+            y_data = np.asarray(line.get_ydata(), dtype=float)
+            if x_data.size == 0:
+                continue
+
+            x_span = max(1.0, float(np.max(x_data) - np.min(x_data)))
+            y_span = max(1.0, float(np.max(y_data) - np.min(y_data)))
+            distances = ((x_data - x_value) / x_span) ** 2 + ((y_data - y_value) / y_span) ** 2
+            index = int(np.argmin(distances))
+            distance = float(distances[index])
+
+            if best_distance is None or distance < best_distance:
+                best_distance = distance
+                best_match = (line, float(x_data[index]), float(y_data[index]))
+
+        return best_match
+
+    def update_marker_for_target(self, target: str, axis, canvas: FigureCanvasTkAgg, line, wavelength: float, intensity: float) -> None:
+        marker_artist = self.get_marker_artist_for_target(target)
+        marker_annotation = self.get_marker_annotation_for_target(target)
+        marker_line = self.get_marker_line_for_target(target)
+        color = line.get_color()
+
+        if marker_artist is None:
+            marker_artist = axis.scatter([wavelength], [intensity], s=80, color=color, edgecolors="#ffffff", linewidths=1.5, zorder=5)
+            self.set_marker_artist_for_target(target, marker_artist)
+        else:
+            marker_artist.set_offsets(np.array([[wavelength, intensity]]))
+            marker_artist.set_color(color)
+            marker_artist.set_edgecolors("#ffffff")
+
+        if marker_line is None:
+            marker_line = axis.axvline(wavelength, color=color, linestyle="--", linewidth=1.1, alpha=0.7)
+            self.set_marker_line_for_target(target, marker_line)
+        else:
+            marker_line.set_xdata([wavelength, wavelength])
+            marker_line.set_color(color)
+
+        label = f"{line.get_label()}\nλ={wavelength:.1f} nm\nI={intensity:.3f}"
+        if marker_annotation is None:
+            marker_annotation = axis.annotate(
+                label,
+                xy=(wavelength, intensity),
+                xytext=(14, 14),
+                textcoords="offset points",
+                bbox={"boxstyle": "round,pad=0.35", "fc": "#101010", "ec": color, "alpha": 0.92},
+                color="#ffffff",
+                fontsize=9,
+                arrowprops={"arrowstyle": "->", "color": color},
+            )
+            self.set_marker_annotation_for_target(target, marker_annotation)
+        else:
+            marker_annotation.xy = (wavelength, intensity)
+            marker_annotation.set_text(label)
+            marker_annotation.set_bbox({"boxstyle": "round,pad=0.35", "fc": "#101010", "ec": color, "alpha": 0.92})
+            if marker_annotation.arrow_patch is not None:
+                marker_annotation.arrow_patch.set_color(color)
+
+        canvas.draw()
 
     def save_captured_image(self) -> None:
         if self.captured_image_rgb is None:
@@ -476,12 +689,28 @@ class CameraRecorderApp:
         self.update_spectrum_plot()
         self.status_var.set("A pontok torolve lettek.")
 
+    def on_processor_window_close(self) -> None:
+        if self.processor_window is not None and self.processor_window.winfo_exists():
+            self.processor_window.destroy()
+
+        self.processor_window = None
+        self.processor_canvas = None
+        self.processor_figure = None
+        self.processor_axis = None
+        self.processor_plot_canvas = None
+        self.processor_marker_annotation = None
+        self.processor_marker_artist = None
+        self.processor_marker_line = None
+        self.processor_plot_connection_id = None
+        self.processor_lines = []
+
     def on_close(self) -> None:
         if self.preview_after_id is not None:
             self.root.after_cancel(self.preview_after_id)
             self.preview_after_id = None
 
-        self.stop_recording()
+        self.close_fullscreen_spectrum_window()
+        self.on_processor_window_close()
         self.release_camera()
         self.root.destroy()
 
@@ -489,15 +718,83 @@ class CameraRecorderApp:
     def rgb_to_hex(rgb: tuple[int, int, int]) -> str:
         return "#{:02x}{:02x}{:02x}".format(*rgb)
 
+    @staticmethod
+    def get_marker_color(index: int) -> str:
+        return MARKER_COLORS[index % len(MARKER_COLORS)]
+
+    def set_lines_for_target(self, target: str, lines: list) -> None:
+        if target == "processor":
+            self.processor_lines = lines
+        else:
+            self.fullscreen_lines = lines
+
+    def get_lines_for_target(self, target: str) -> list:
+        return self.processor_lines if target == "processor" else self.fullscreen_lines
+
+    def get_axis_for_target(self, target: str):
+        return self.processor_axis if target == "processor" else self.fullscreen_axis
+
+    def get_canvas_for_target(self, target: str) -> FigureCanvasTkAgg | None:
+        return self.processor_plot_canvas if target == "processor" else self.fullscreen_plot_canvas
+
+    def get_connection_id_for_target(self, target: str) -> int | None:
+        return self.processor_plot_connection_id if target == "processor" else self.fullscreen_plot_connection_id
+
+    def set_connection_id_for_target(self, target: str, value: int) -> None:
+        if target == "processor":
+            self.processor_plot_connection_id = value
+        else:
+            self.fullscreen_plot_connection_id = value
+
+    def get_marker_annotation_for_target(self, target: str):
+        return self.processor_marker_annotation if target == "processor" else self.fullscreen_marker_annotation
+
+    def set_marker_annotation_for_target(self, target: str, value) -> None:
+        if target == "processor":
+            self.processor_marker_annotation = value
+        else:
+            self.fullscreen_marker_annotation = value
+
+    def get_marker_artist_for_target(self, target: str):
+        return self.processor_marker_artist if target == "processor" else self.fullscreen_marker_artist
+
+    def set_marker_artist_for_target(self, target: str, value) -> None:
+        if target == "processor":
+            self.processor_marker_artist = value
+        else:
+            self.fullscreen_marker_artist = value
+
+    def get_marker_line_for_target(self, target: str):
+        return self.processor_marker_line if target == "processor" else self.fullscreen_marker_line
+
+    def set_marker_line_for_target(self, target: str, value) -> None:
+        if target == "processor":
+            self.processor_marker_line = value
+        else:
+            self.fullscreen_marker_line = value
+
+    def clear_marker_for_target(self, target: str) -> None:
+        marker_annotation = self.get_marker_annotation_for_target(target)
+        marker_artist = self.get_marker_artist_for_target(target)
+        marker_line = self.get_marker_line_for_target(target)
+
+        if marker_annotation is not None:
+            marker_annotation.remove()
+            self.set_marker_annotation_for_target(target, None)
+        if marker_artist is not None:
+            marker_artist.remove()
+            self.set_marker_artist_for_target(target, None)
+        if marker_line is not None:
+            marker_line.remove()
+            self.set_marker_line_for_target(target, None)
+
 
 def main() -> None:
     root = tk.Tk()
     style = ttk.Style(root)
     if "vista" in style.theme_names():
         style.theme_use("vista")
-    app = CameraRecorderApp(root)
-    app.redraw_capture_canvas()
-    app.update_spectrum_plot()
+    CameraRecorderApp(root)
     root.mainloop()
 
 
