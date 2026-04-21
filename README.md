@@ -9,7 +9,7 @@ Python GUI alkalmazás motor-tekercselési folyamat megfigyelésére USB vagy la
 - Egyetlen RGB kép rögzítése a pillanatnyi képkockából.
 - Külön feldolgozó ablak a rögzített képhez és a spektrumhoz.
 - Egérgörgős nagyítás a feldolgozó és a szűrt képen.
-- Nagyított kép pásztázása jobb vagy középső egérgombbal.
+- Nagyított kép pásztázása középső egérgombbal.
 - Pontok elhelyezése a rögzített képen.
 - Pontonként külön színű, kontrasztos számjelölés a képen.
 - Pontonként külön színű spektrumgörbe rajzolása a pont számának színével egyezően.
@@ -52,13 +52,15 @@ python app.py
 2. Válaszd ki a kamerát a felső listából vagy a `Kamera` menüből.
 3. Kattints a `Kép rögzítése` gombra.
 4. A megnyíló feldolgozó ablakban kattints a rögzített képen a vizsgálni kívánt pontokra.
-5. Egérgörgővel nagyíthatsz a képre, jobb vagy középső egérgombbal pedig mozgathatod a nagyított nézetet.
-6. A spektrumdiagram ugyanebben az ablakban automatikusan frissül.
-7. A `Spektrum teljes képernyőn` gombbal kinagyíthatod a spektrumot.
-8. Kattints egy spektrumgörbére, hogy a marker kiírja a hullámhosszt és az intenzitást.
-9. A `Szűrő mentése` gombbal JSON fájlba mentheted az aktuális markerpontokból számolt min-max spektrumsávot.
-10. A `Szűrő betöltése` gombbal visszatölthetsz egy korábban mentett sávot; ez halvány szürke háttérként jelenik meg a spektrumon.
-11. A `Szűrő alkalmazása` gombbal új ablakban jelenítheted meg azokat a pixeleket, amelyek minden hullámhosszon a kijelölt markerek minimuma és maximuma közé esnek. Ha nincs legalább két aktuális marker, de van betöltött szűrő, akkor a program a betöltött sávot használja.
+5. Jobb egérgombbal törölhetsz egy markerpontot a képről.
+6. Egérgörgővel nagyíthatsz a képre, középső egérgombbal pedig mozgathatod a nagyított nézetet.
+7. A spektrumdiagram ugyanebben az ablakban automatikusan frissül.
+8. A `Spektrum teljes képernyőn` gombbal kinagyíthatod a spektrumot.
+9. Kattints egy spektrumgörbére, hogy a marker kiírja a hullámhosszt és az intenzitást.
+10. A `Szűrő mentése` gombbal JSON fájlba mentheted az aktuális markerpontokból számolt min-max spektrumsávot.
+11. A `Szűrő betöltése` gombbal visszatölthetsz egy korábban mentett sávot; ez halvány szürke háttérként jelenik meg a spektrumon.
+12. A `Betöltött szűrő törlése` gombbal eltávolíthatod a korábban betöltött szűrősávot.
+13. A `Szűrő alkalmazása` gombbal új ablakban jelenítheted meg azokat a pixeleket, amelyek minden hullámhosszon a kijelölt markerek minimuma és maximuma közé esnek. Ha nincs legalább két aktuális marker, de van betöltött szűrő, akkor a program a betöltött sávot használja.
 
 ## Projektfájlok
 

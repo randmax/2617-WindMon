@@ -173,6 +173,7 @@ class CameraRecorderApp:
 
         self.preview_label = ttk.Label(preview_group)
         self.preview_label.grid(row=1, column=0, sticky="nsew")
+        self.preview_label.bind("<Configure>", lambda _event: self.refresh_preview_image())
 
     def _build_menubar(self) -> None:
         menubar = tk.Menu(self.root)
@@ -211,7 +212,7 @@ class CameraRecorderApp:
 
         toolbar = ttk.Frame(container)
         toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
-        toolbar.columnconfigure(6, weight=1)
+        toolbar.columnconfigure(7, weight=1)
         ttk.Button(toolbar, text="Pontok törlése", command=self.clear_points).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(toolbar, text="RGB kép mentése", command=self.save_captured_image).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(toolbar, text="Spektrum teljes képernyőn", command=self.open_fullscreen_spectrum_window).grid(
@@ -222,10 +223,13 @@ class CameraRecorderApp:
         )
         ttk.Button(toolbar, text="Szűrő mentése", command=self.save_filter_band).grid(row=0, column=4, padx=(0, 8))
         ttk.Button(toolbar, text="Szűrő betöltése", command=self.load_filter_band).grid(row=0, column=5, padx=(0, 8))
+        ttk.Button(toolbar, text="Betöltött szűrő törlése", command=self.clear_loaded_filter_band).grid(
+            row=0, column=6, padx=(0, 8)
+        )
         ttk.Label(
             toolbar,
-            text="Kattints a képre pontokhoz, a grafikonra markeres leolvasáshoz.",
-        ).grid(row=0, column=6, sticky="e")
+            text="Bal kattintás: pont hozzáadása, jobb kattintás: pont törlése.",
+        ).grid(row=0, column=7, sticky="e")
 
         image_group = ttk.LabelFrame(container, text="Rögzített RGB kép", padding=10)
         image_group.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
@@ -244,7 +248,7 @@ class CameraRecorderApp:
         self.processor_canvas.grid(row=0, column=0, sticky="nsew")
         self.processor_canvas.bind("<Button-1>", self.on_capture_canvas_click)
 
-        # Egérgörgővel nagyítás, középső vagy jobb gombbal pásztázás.
+        # Egérgörgővel nagyítás, középső gombbal pásztázás.
         # A kattintott pontok koordinátája a nagyított nézetből is
         # visszaszámolódik az eredeti képpixelre.
         self.processor_canvas.bind("<MouseWheel>", lambda event: self.on_image_mouse_wheel(event, "processor"))
@@ -252,8 +256,7 @@ class CameraRecorderApp:
         self.processor_canvas.bind("<Button-5>", lambda event: self.on_image_mouse_wheel(event, "processor", -1))
         self.processor_canvas.bind("<ButtonPress-2>", lambda event: self.start_image_pan(event, "processor"))
         self.processor_canvas.bind("<B2-Motion>", self.on_image_pan)
-        self.processor_canvas.bind("<ButtonPress-3>", lambda event: self.start_image_pan(event, "processor"))
-        self.processor_canvas.bind("<B3-Motion>", self.on_image_pan)
+        self.processor_canvas.bind("<Button-3>", self.remove_capture_point)
         self.processor_canvas.bind("<Configure>", lambda _event: self.redraw_capture_canvas())
 
         plot_group = ttk.LabelFrame(container, text="RGB pontok becsült spektruma", padding=10)
@@ -405,10 +408,35 @@ class CameraRecorderApp:
             self.status_var.set(f"A kamera nem nyitható meg: {label}")
             return
 
+        self.configure_camera_resolution(cap)
         self.capture = cap
         self.current_camera_index = index
         self.camera_var.set(label)
-        self.status_var.set(f"Aktív kamera: {label}")
+        width = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+        height = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+        self.status_var.set(f"Aktív kamera: {label}, felbontás: {width}x{height}")
+
+    def configure_camera_resolution(self, cap: cv2.VideoCapture) -> None:
+        # Először nagyobb felbontásokat kérünk, 16:9-es és 4:3-as módokkal is.
+        # Ha a kamera nem támogatja őket, a driver a legközelebbi elérhető
+        # módra áll vissza.
+        cap.set(cv2.CAP_PROP_FOURCC, cv2.VideoWriter_fourcc(*"MJPG"))
+        for width, height in (
+            (1920, 1080),
+            (1600, 1200),
+            (1280, 1024),
+            (1280, 960),
+            (1280, 720),
+            (1024, 768),
+            (800, 600),
+            (640, 480),
+        ):
+            cap.set(cv2.CAP_PROP_FRAME_WIDTH, width)
+            cap.set(cv2.CAP_PROP_FRAME_HEIGHT, height)
+            actual_w = int(cap.get(cv2.CAP_PROP_FRAME_WIDTH) or 0)
+            actual_h = int(cap.get(cv2.CAP_PROP_FRAME_HEIGHT) or 0)
+            if actual_w >= width * 0.9 and actual_h >= height * 0.9:
+                break
 
     def release_camera(self) -> None:
         if self.capture is not None:
@@ -420,14 +448,28 @@ class CameraRecorderApp:
             ok, frame_bgr = self.capture.read()
             if ok:
                 self.latest_frame_bgr = frame_bgr
-                preview_rgb = cv2.cvtColor(frame_bgr, cv2.COLOR_BGR2RGB)
-                preview_image = self.resize_for_display(preview_rgb, self.preview_size)
-                self.preview_photo = ImageTk.PhotoImage(Image.fromarray(preview_image))
-                self.preview_label.configure(image=self.preview_photo)
+                self.refresh_preview_image()
             else:
                 self.status_var.set("Nem sikerült képkockát olvasni a kamerából.")
 
         self.preview_after_id = self.root.after(30, self.update_preview_loop)
+
+    def refresh_preview_image(self) -> None:
+        if self.latest_frame_bgr is None:
+            return
+
+        preview_rgb = cv2.cvtColor(self.latest_frame_bgr, cv2.COLOR_BGR2RGB)
+        preview_size = self.get_preview_display_size()
+        preview_image = self.resize_for_display(preview_rgb, preview_size)
+        self.preview_photo = ImageTk.PhotoImage(Image.fromarray(preview_image))
+        self.preview_label.configure(image=self.preview_photo)
+
+    def get_preview_display_size(self) -> tuple[int, int]:
+        width = self.preview_label.winfo_width()
+        height = self.preview_label.winfo_height()
+        if width <= 1 or height <= 1:
+            return self.preview_size
+        return width, height
 
     def resize_for_display(self, image_rgb: np.ndarray, size: tuple[int, int]) -> np.ndarray:
         target_w, target_h = size
@@ -751,6 +793,45 @@ class CameraRecorderApp:
         self.redraw_capture_canvas()
         self.update_spectrum_plot()
 
+    def remove_capture_point(self, event: tk.Event) -> str:
+        if self.captured_image_rgb is None or not self.sample_points:
+            return "break"
+
+        hit = self.find_nearest_sample_point_on_canvas(event.x, event.y)
+        if hit is None:
+            return "break"
+
+        self.sample_points.pop(hit)
+        self.redraw_capture_canvas()
+        self.update_spectrum_plot()
+        self.status_var.set("Marker pont törölve.")
+        return "break"
+
+    def find_nearest_sample_point_on_canvas(self, event_x: int, event_y: int) -> int | None:
+        if self.captured_image_rgb is None or self.processor_canvas is None:
+            return None
+
+        disp_w, disp_h, offset_x, offset_y = self.get_zoomed_image_geometry(
+            self.captured_image_rgb,
+            self.processor_canvas,
+            "processor",
+        )
+        scale_x = disp_w / self.captured_image_rgb.shape[1]
+        scale_y = disp_h / self.captured_image_rgb.shape[0]
+        hit_radius = 12.0
+        nearest_index = None
+        nearest_distance = None
+
+        for index, point in enumerate(self.sample_points):
+            canvas_x = point.x * scale_x + offset_x
+            canvas_y = point.y * scale_y + offset_y
+            distance = float(np.hypot(canvas_x - event_x, canvas_y - event_y))
+            if distance <= hit_radius and (nearest_distance is None or distance < nearest_distance):
+                nearest_index = index
+                nearest_distance = distance
+
+        return nearest_index
+
     def estimate_spectrum(self, rgb: tuple[int, int, int]) -> np.ndarray:
         wavelengths = np.linspace(WAVELENGTH_START, WAVELENGTH_END, SPECTRUM_SAMPLES)
         r, g, b = [channel / 255.0 for channel in rgb]
@@ -1028,6 +1109,17 @@ class CameraRecorderApp:
         self.loaded_filter_name = Path(target).name
         self.update_spectrum_plot()
         self.status_var.set(f"Szűrő betöltve: {target}")
+
+    def clear_loaded_filter_band(self) -> None:
+        if self.loaded_filter_min_values is None and self.loaded_filter_max_values is None:
+            self.status_var.set("Nincs betöltött szűrő.")
+            return
+
+        self.loaded_filter_min_values = None
+        self.loaded_filter_max_values = None
+        self.loaded_filter_name = None
+        self.update_spectrum_plot()
+        self.status_var.set("A betöltött szűrő törölve lett.")
 
     def estimate_image_spectrum(self) -> np.ndarray:
         if self.captured_image_rgb is None:
