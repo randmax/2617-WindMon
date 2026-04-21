@@ -77,6 +77,8 @@ class CameraRecorderApp:
         self.processor_marker_line = None
         self.processor_plot_connection_id: int | None = None
         self.processor_lines: list = []
+        self.filtered_window: tk.Toplevel | None = None
+        self.filtered_canvas: tk.Canvas | None = None
 
         self.fullscreen_window: tk.Toplevel | None = None
         self.fullscreen_figure: Figure | None = None
@@ -90,6 +92,7 @@ class CameraRecorderApp:
 
         self.capture_photo: ImageTk.PhotoImage | None = None
         self.preview_photo: ImageTk.PhotoImage | None = None
+        self.filtered_photo: ImageTk.PhotoImage | None = None
 
         self.menu_camera = tk.Menu(self.root, tearoff=False)
 
@@ -186,16 +189,19 @@ class CameraRecorderApp:
 
         toolbar = ttk.Frame(container)
         toolbar.grid(row=0, column=0, columnspan=2, sticky="ew", pady=(0, 12))
-        toolbar.columnconfigure(3, weight=1)
+        toolbar.columnconfigure(4, weight=1)
         ttk.Button(toolbar, text="Pontok torlese", command=self.clear_points).grid(row=0, column=0, padx=(0, 8))
         ttk.Button(toolbar, text="RGB kep mentese", command=self.save_captured_image).grid(row=0, column=1, padx=(0, 8))
         ttk.Button(toolbar, text="Spektrum teljes kepernyon", command=self.open_fullscreen_spectrum_window).grid(
             row=0, column=2, padx=(0, 8)
         )
+        ttk.Button(toolbar, text="Szuro alkalmazasa", command=self.apply_marker_range_filter).grid(
+            row=0, column=3, padx=(0, 8)
+        )
         ttk.Label(
             toolbar,
             text="Kattints a kepre pontokhoz, a grafikonra markeres leolvasashoz.",
-        ).grid(row=0, column=3, sticky="e")
+        ).grid(row=0, column=4, sticky="e")
 
         image_group = ttk.LabelFrame(container, text="Rogzitett RGB kep", padding=10)
         image_group.grid(row=1, column=0, sticky="nsew", padx=(0, 10))
@@ -663,6 +669,90 @@ class CameraRecorderApp:
 
         canvas.draw()
 
+    def apply_marker_range_filter(self) -> None:
+        if self.captured_image_rgb is None:
+            messagebox.showinfo("Nincs kep", "Elobb rogziteni kell egy RGB kepet.")
+            return
+
+        if len(self.sample_points) < 2:
+            messagebox.showinfo("Keves marker", "A szureshez legalabb ket pontot jelolj ki a kepen.")
+            return
+
+        marker_spectrums = np.array([point.spectrum for point in self.sample_points], dtype=np.float32)
+        min_values = np.min(marker_spectrums, axis=0)
+        max_values = np.max(marker_spectrums, axis=0)
+
+        image_spectrum = self.estimate_image_spectrum()
+        mask = np.all((image_spectrum >= min_values) & (image_spectrum <= max_values), axis=2)
+        filtered_image = np.zeros_like(self.captured_image_rgb)
+        filtered_image[mask] = self.captured_image_rgb[mask]
+
+        self.open_filtered_window(filtered_image, int(np.count_nonzero(mask)))
+
+    def estimate_image_spectrum(self) -> np.ndarray:
+        if self.captured_image_rgb is None:
+            return np.empty((0, 0, 0), dtype=np.float32)
+
+        wavelengths = np.linspace(WAVELENGTH_START, WAVELENGTH_END, SPECTRUM_SAMPLES)
+        image = self.captured_image_rgb.astype(np.float32) / 255.0
+        r = image[:, :, 0]
+        g = image[:, :, 1]
+        b = image[:, :, 2]
+
+        red_curve = np.exp(-0.5 * ((wavelengths - 620.0) / 36.0) ** 2).astype(np.float32)
+        green_curve = np.exp(-0.5 * ((wavelengths - 540.0) / 30.0) ** 2).astype(np.float32)
+        blue_curve = np.exp(-0.5 * ((wavelengths - 460.0) / 24.0) ** 2).astype(np.float32)
+
+        spectrum = (
+            (r[:, :, np.newaxis] * red_curve)
+            + (g[:, :, np.newaxis] * green_curve)
+            + (b[:, :, np.newaxis] * blue_curve)
+        )
+        max_spectrum = np.max(spectrum, axis=2, keepdims=True)
+        return np.divide(
+            spectrum,
+            max_spectrum,
+            out=np.zeros_like(spectrum, dtype=np.float32),
+            where=max_spectrum > 0,
+        )
+
+    def open_filtered_window(
+        self,
+        filtered_image: np.ndarray,
+        matched_pixels: int,
+    ) -> None:
+        if self.filtered_window is not None and self.filtered_window.winfo_exists():
+            self.filtered_window.destroy()
+
+        self.filtered_window = tk.Toplevel(self.root)
+        self.filtered_window.title("Szurt kep")
+        self.filtered_window.geometry("1120x720")
+        self.filtered_window.minsize(900, 620)
+        self.filtered_window.protocol("WM_DELETE_WINDOW", self.close_filtered_window)
+
+        container = ttk.Frame(self.filtered_window, padding=12)
+        container.pack(fill=tk.BOTH, expand=True)
+        container.columnconfigure(0, weight=1)
+        container.rowconfigure(1, weight=1)
+
+        info_text = f"Szures: teljes {WAVELENGTH_START}-{WAVELENGTH_END} nm tartomany, talalat: {matched_pixels} pixel"
+        ttk.Label(container, text=info_text).grid(row=0, column=0, sticky="w", pady=(0, 10))
+
+        self.filtered_canvas = tk.Canvas(
+            container,
+            width=self.capture_size[0],
+            height=self.capture_size[1],
+            bg="#1f1f1f",
+            highlightthickness=1,
+            highlightbackground="#707070",
+        )
+        self.filtered_canvas.grid(row=1, column=0, sticky="nsew")
+
+        display_image = self.resize_for_display(filtered_image, self.capture_size)
+        self.filtered_photo = ImageTk.PhotoImage(Image.fromarray(display_image))
+        self.filtered_canvas.create_image(0, 0, anchor=tk.NW, image=self.filtered_photo)
+        self.status_var.set(info_text)
+
     def save_captured_image(self) -> None:
         if self.captured_image_rgb is None:
             messagebox.showinfo("Nincs kep", "Elobb rogziteni kell egy RGB kepet.")
@@ -689,6 +779,14 @@ class CameraRecorderApp:
         self.update_spectrum_plot()
         self.status_var.set("A pontok torolve lettek.")
 
+    def close_filtered_window(self) -> None:
+        if self.filtered_window is not None and self.filtered_window.winfo_exists():
+            self.filtered_window.destroy()
+
+        self.filtered_window = None
+        self.filtered_canvas = None
+        self.filtered_photo = None
+
     def on_processor_window_close(self) -> None:
         if self.processor_window is not None and self.processor_window.winfo_exists():
             self.processor_window.destroy()
@@ -710,6 +808,7 @@ class CameraRecorderApp:
             self.preview_after_id = None
 
         self.close_fullscreen_spectrum_window()
+        self.close_filtered_window()
         self.on_processor_window_close()
         self.release_camera()
         self.root.destroy()
